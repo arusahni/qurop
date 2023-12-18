@@ -1,5 +1,6 @@
 mod cli;
 mod errors;
+mod x11;
 
 use std::{
     env,
@@ -13,10 +14,11 @@ use std::{
 
 use clap::Parser;
 use directories::ProjectDirs;
-use errors::Error;
 use log::{debug, info, warn};
 
-static COMMAND: &str = "wezterm connect dropdown";
+use errors::Error;
+
+static COMMAND: &str = "wezterm connect dropdown --class qurop";
 
 enum StreamState {
     New(UnixListener),
@@ -69,7 +71,7 @@ fn handle_socket_messages(listener: UnixListener, tx: mpsc::Sender<String>) -> R
         stream.read_to_string(&mut command)?;
         debug!("Received: {}", command);
         match command.as_str() {
-            "open" | "close" => tx.send(command.clone()).unwrap(),
+            "open" | "close" => tx.send(command.clone()).expect("command should send"),
             "term" => break,
             _ => warn!("Unrecognized command: {}", command),
         }
@@ -85,22 +87,42 @@ fn run(listener: UnixListener) {
             .arg(COMMAND)
             .spawn()
             .expect("failed to start");
+
         loop {
             if let Ok(msg) = rx.recv() {
                 match msg.as_str() {
-                    "open" => info!("Opening"),
+                    "open" => {
+                        if let Ok(Some(status)) = program.try_wait() {
+                            info!("Program has exited ({status}). Restarting.");
+                            program = Command::new("sh")
+                                .arg("-c")
+                                .arg(COMMAND)
+                                .spawn()
+                                .expect("failed to start");
+                        } else {
+                            x11::map_qurop_window();
+                        }
+                    }
                     "close" => {
                         info!("Closing");
                         program.kill().unwrap();
                         break;
                     }
-                    msg => info!("Unknown: '{msg}'"),
+                    "unmap" => x11::unmap_qurop_window(),
+                    command if command.starts_with("unmap:") => {
+                        x11::unmap_window(command.split(':').last().unwrap().parse().unwrap())
+                    }
+                    _ => info!("Unknown: '{msg}'"),
                 }
             }
         }
     });
+    let socket_tx = tx.clone();
     let _socket_manager = thread::spawn(|| {
-        handle_socket_messages(listener, tx).unwrap();
+        handle_socket_messages(listener, socket_tx).unwrap();
+    });
+    let _window_server_manager = thread::spawn(|| {
+        x11::handle_window(tx);
     });
     program_manager.join().unwrap();
 }
