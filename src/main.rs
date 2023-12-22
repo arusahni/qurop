@@ -8,7 +8,7 @@ use std::{
     io::{Read, Write},
     os::unix::net::{UnixListener, UnixStream},
     process::Command,
-    sync::mpsc,
+    sync::{mpsc, Arc, Mutex, RwLock},
     thread,
     time::Duration,
 };
@@ -80,11 +80,11 @@ fn handle_socket_messages(listener: UnixListener, tx: mpsc::Sender<String>) -> R
     Ok(())
 }
 
-fn block_for_window() {
-    trace!("blocking for window");
+fn block_for_window(matcher: &x11::WindowMatcher) {
+    trace!("blocking for window {:?}", matcher);
     let mut count = 0;
     loop {
-        match x11::map_qurop_window() {
+        match x11::map_qurop_window(matcher) {
             Ok(window_id) => {
                 x11::position_window(window_id);
                 return;
@@ -95,45 +95,75 @@ fn block_for_window() {
             Err(err) => panic!("Unhandled error: {err}"),
         }
         count += 1;
-        if count == 5 {
+        if count % 5 == 4 {
             warn!("could not find window in {} attempts", count);
             thread::sleep(Duration::from_millis(100));
         }
-        if count > 10 {
+        if count > 20 {
             panic!("could not find window in {} attempts", count);
         }
     }
 }
 
+pub(crate) struct Context {
+    pub matcher: x11::WindowMatcher,
+}
+
 fn run(listener: UnixListener) {
     let (tx, rx) = mpsc::channel::<String>();
+    // TODO: set up context that holds a matcher behind a RcCell/mutex
+    // let ctx = Arc::new(RwLock::new(Context {
+    //     matcher: x11::WindowMatcher::WmClass("qurop".into()),
+    // }));
+    let ctx = Arc::new(RwLock::new(Context {
+        matcher: x11::WindowMatcher::ProcessId(None),
+    }));
+    let program_ctx = Arc::clone(&ctx);
     let program_manager = thread::spawn(move || {
         let mut program = Command::new("sh")
             .arg("-c")
             .arg(COMMAND)
             .spawn()
             .expect("failed to start");
-        block_for_window();
+        {
+            let matcher = &mut program_ctx.write().unwrap().matcher;
+            if matches!(matcher, x11::WindowMatcher::ProcessId(_)) {
+                trace!("Setting new pid {}", program.id());
+                *matcher = x11::WindowMatcher::ProcessId(Some(program.id()));
+            }
+        }
+        block_for_window(&program_ctx.clone().read().unwrap().matcher);
         loop {
             if let Ok(msg) = rx.recv() {
                 match msg.as_str() {
                     "open" => {
+                        let ctx = program_ctx.clone();
                         if let Ok(Some(status)) = program.try_wait() {
                             info!("Program has exited ({}). Restarting.", status);
+                            let mut process = ctx.write().unwrap();
                             program = Command::new("sh")
                                 .arg("-c")
                                 .arg(COMMAND)
                                 .spawn()
                                 .expect("failed to start");
+                            if matches!(process.matcher, x11::WindowMatcher::ProcessId(_)) {
+                                trace!("Setting new pid {}", program.id());
+                                process.matcher = x11::WindowMatcher::ProcessId(Some(program.id()));
+                            }
                         }
-                        block_for_window();
+                        let lock = &ctx.read().unwrap();
+                        block_for_window(&lock.matcher);
                     }
                     "close" => {
                         info!("Closing");
                         program.kill().unwrap();
                         break;
                     }
-                    "unmap" => x11::unmap_qurop_window(),
+                    "unmap" => {
+                        let ctx = program_ctx.clone();
+                        let lock = ctx.read().unwrap();
+                        x11::unmap_qurop_window(&lock.matcher);
+                    }
                     command if command.starts_with("unmap:") => {
                         x11::unmap_window(command.split(':').last().unwrap().parse().unwrap())
                     }
@@ -146,8 +176,9 @@ fn run(listener: UnixListener) {
     let _socket_manager = thread::spawn(|| {
         handle_socket_messages(listener, socket_tx).unwrap();
     });
-    let _window_server_manager = thread::spawn(|| {
-        x11::handle_window(tx);
+    let window_ctx = Arc::clone(&ctx);
+    let _window_server_manager = thread::spawn(move || {
+        x11::handle_window(tx, &window_ctx);
     });
     program_manager.join().unwrap();
 }
