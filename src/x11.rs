@@ -1,17 +1,24 @@
-use log::{debug, info, trace};
-use std::{sync::mpsc, thread::sleep, time::Duration};
+use log::{debug, info, log_enabled, trace, warn};
+use std::{sync::mpsc, thread, time::Duration};
 use x11rb::{
     connection::Connection,
     properties::WmClass,
     protocol::{xproto::*, Event},
+    wrapper::ConnectionExt as WrapperConnectionExt,
 };
+
+use crate::errors::Error;
 
 x11rb::atom_manager! {
     pub(crate) Atoms:
     AtomsCookie {
+        _MOTIF_WM_HINTS,
         _NET_ACTIVE_WINDOW,
         _NET_WM_CLASS,
         _NET_WM_NAME,
+        _NET_WM_PID,
+        _NET_WM_WINDOW_TYPE,
+        _KDE_NET_WM_WINDOW_TYPE_OVERRIDE,
         UTF8_STRING,
     }
 }
@@ -56,6 +63,7 @@ pub(crate) fn get_qurop_window_id(
     })
 }
 
+/// Get the name of the specified window.
 pub(crate) fn get_window_name(
     conn: &x11rb::rust_connection::RustConnection,
     window_id: u32,
@@ -74,11 +82,12 @@ pub(crate) fn get_window_name(
     String::from_utf8(name.reply().unwrap().value).unwrap()
 }
 
+/// Get the class of the specified window.
 pub(crate) fn get_window_class(
     conn: &x11rb::rust_connection::RustConnection,
     window_id: u32,
 ) -> Option<String> {
-    trace!("Getting window class for {window_id}");
+    // trace!("Getting window class for {window_id}");
     let class = WmClass::get(conn, window_id).expect("wmclass error");
     match class.reply() {
         Ok(wm_class) => Some(String::from(std::str::from_utf8(wm_class.class()).unwrap())),
@@ -86,7 +95,7 @@ pub(crate) fn get_window_class(
     }
 }
 
-/// Handle window focus issues
+/// Handle window focus changes.
 pub(crate) fn handle_window(tx: mpsc::Sender<String>) {
     let (connection, num) = x11rb::connect(None).expect("x11 connection missing");
     let screen = &connection.setup().roots[num];
@@ -97,39 +106,44 @@ pub(crate) fn handle_window(tx: mpsc::Sender<String>) {
         "window handler: Root {:?} | active_atom {}",
         root, active_atom
     );
-    let mut window_id: Option<u32> = None;
-    loop {
-        window_id = get_qurop_window_id(&connection, root);
-        if window_id.is_some() {
-            break;
+    let mut count = 0;
+    let window_id = loop {
+        trace!("window handler blocking for window id");
+        let window_id = get_qurop_window_id(&connection, root);
+        if let Some(window_id) = window_id {
+            break window_id;
         }
-        sleep(Duration::from_millis(100));
-    }
-    if let Some(window) = window_id {
-        let active_class =
-            get_window_class(&connection, window).unwrap_or_else(|| "unknown".into());
-        let active_name = get_window_name(&connection, window, atoms);
-        debug!("Active window: {window} ({active_name} | {active_class})");
-        let event_sub = ChangeWindowAttributesAux::default().event_mask(EventMask::PROPERTY_CHANGE);
-        connection
-            .change_window_attributes(root, &event_sub)
-            .expect("couldn't watch attributes");
-        info!("starting waiting for events with window {}", window);
-        connection.flush().unwrap();
-        loop {
-            let event = connection
-                .wait_for_event()
-                .expect("could not wait for xserver events");
+        count += 1;
+        if count == 5 {
+            warn!("could not find window in {} attempts", count);
+            thread::sleep(Duration::from_millis(100));
+        }
+        if count > 10 {
+            panic!("could not find window in {} attempts", count);
+        }
+    };
+    let active_class = get_window_class(&connection, window_id).unwrap_or_else(|| "unknown".into());
+    let active_name = get_window_name(&connection, window_id, atoms);
+    debug!("Active window: {window_id} ({active_name} | {active_class})");
+    let event_sub = ChangeWindowAttributesAux::default().event_mask(EventMask::PROPERTY_CHANGE);
+    connection
+        .change_window_attributes(root, &event_sub)
+        .expect("couldn't watch attributes");
+    info!("starting waiting for events with window {}", window_id);
+    connection.flush().unwrap();
+    loop {
+        let event = connection
+            .wait_for_event()
+            .expect("could not wait for xserver events");
 
-            if let Event::PropertyNotify(e) = event {
-                trace!("Property notify event for {}", e.atom);
-                if e.atom == active_atom {
-                    if let Ok(active_window) = get_active_window(&connection, screen, active_atom) {
-                        if active_window != window {
-                            debug!("sending unmap request: {} != {}", active_window, window);
-                            tx.send(format!("unmap:{window}"))
-                                .expect("couldn't send unmap command");
-                        }
+        if let Event::PropertyNotify(e) = event {
+            trace!("Property notify event for {}", e.atom);
+            if e.atom == active_atom {
+                if let Ok(active_window) = get_active_window(&connection, screen, active_atom) {
+                    if active_window != window_id {
+                        debug!("sending unmap request: {} != {}", active_window, window_id);
+                        tx.send(format!("unmap:{window_id}"))
+                            .expect("couldn't send unmap command");
                     }
                 }
             }
@@ -137,7 +151,9 @@ pub(crate) fn handle_window(tx: mpsc::Sender<String>) {
     }
 }
 
+/// Unmap the qurop window.
 pub(crate) fn unmap_qurop_window() {
+    trace!("unmapping qurop");
     let (connection, num) = x11rb::connect(None).expect("x11 connection missing");
     let screen = &connection.setup().roots[num];
     let qurop_window_id =
@@ -149,6 +165,7 @@ pub(crate) fn unmap_qurop_window() {
     connection.flush().expect("couldn't flush");
 }
 
+/// Unmap the specified window.
 pub(crate) fn unmap_window(window_id: u32) {
     let (connection, _num) = x11rb::connect(None).expect("x11 connection missing");
     info!("Unmapping window: {window_id}");
@@ -158,14 +175,67 @@ pub(crate) fn unmap_window(window_id: u32) {
     connection.flush().expect("couldn't flush");
 }
 
-pub(crate) fn map_qurop_window() {
+/// Map the qurop window.
+pub(crate) fn map_qurop_window() -> Result<u32, Error> {
+    trace!("mapping qurop");
     let (connection, num) = x11rb::connect(None).expect("x11 connection missing");
     let screen = &connection.setup().roots[num];
     let qurop_window_id =
-        get_qurop_window_id(&connection, screen.root).expect("could not find window");
+        get_qurop_window_id(&connection, screen.root).ok_or_else(|| Error::WindowNotFound)?;
     info!("Mapping qurop window: {qurop_window_id}");
     connection
         .map_window(qurop_window_id)
         .expect("could not map window");
     connection.flush().expect("couldn't flush");
+    Ok(qurop_window_id)
+}
+
+/// Position the window and set decoration properties.
+pub(crate) fn position_window(window_id: u32) {
+    let (connection, num) = x11rb::connect(None).expect("x11 connection missing");
+    let screen = &connection.setup().roots[num];
+    let width = ((screen.width_in_pixels as f64) * 0.66) as u32;
+    let height = ((screen.height_in_pixels as f64) * 0.5) as u32;
+    let x_pos = ((screen.width_in_pixels as f64) * ((1.0 - 0.66) / 2.0)) as i32;
+    let atoms = Atoms::new(&connection).unwrap().reply().unwrap();
+    let window_config = ConfigureWindowAux::new()
+        .height(Some(height))
+        .width(Some(width))
+        .border_width(Some(0))
+        .x(Some(x_pos))
+        .y(Some(0));
+    connection
+        .change_property32(
+            PropMode::REPLACE,
+            window_id,
+            atoms._NET_WM_WINDOW_TYPE,
+            AtomEnum::ATOM,
+            &[atoms._KDE_NET_WM_WINDOW_TYPE_OVERRIDE],
+        )
+        .expect("setting kwin property");
+    connection
+        .change_property32(
+            PropMode::REPLACE,
+            window_id,
+            atoms._MOTIF_WM_HINTS,
+            AtomEnum::CARDINAL,
+            &[2, 0, 0, 0, 0],
+        )
+        .expect("setting motif property");
+    if log_enabled!(log::Level::Debug) {
+        let old_config = connection
+            .get_geometry(window_id)
+            .expect("could not get geometry")
+            .reply()
+            .expect("could not read geometry reply");
+        debug!(
+            "Positioning window {}. old: {:?}, new: {:?}",
+            window_id, old_config, window_config
+        );
+    }
+    connection
+        .configure_window(window_id, &window_config)
+        .expect("couldn't configure window");
+    connection.flush().expect("couldn't flush");
+    connection.sync().expect("couldn't sync");
 }

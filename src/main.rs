@@ -10,11 +10,12 @@ use std::{
     process::Command,
     sync::mpsc,
     thread,
+    time::Duration,
 };
 
 use clap::Parser;
 use directories::ProjectDirs;
-use log::{debug, info, warn};
+use log::{debug, info, trace, warn};
 
 use errors::Error;
 
@@ -79,6 +80,31 @@ fn handle_socket_messages(listener: UnixListener, tx: mpsc::Sender<String>) -> R
     Ok(())
 }
 
+fn block_for_window() {
+    trace!("blocking for window");
+    let mut count = 0;
+    loop {
+        match x11::map_qurop_window() {
+            Ok(window_id) => {
+                x11::position_window(window_id);
+                return;
+            }
+            Err(Error::WindowNotFound) => {
+                trace!("window not found");
+            }
+            Err(err) => panic!("Unhandled error: {err}"),
+        }
+        count += 1;
+        if count == 5 {
+            warn!("could not find window in {} attempts", count);
+            thread::sleep(Duration::from_millis(100));
+        }
+        if count > 10 {
+            panic!("could not find window in {} attempts", count);
+        }
+    }
+}
+
 fn run(listener: UnixListener) {
     let (tx, rx) = mpsc::channel::<String>();
     let program_manager = thread::spawn(move || {
@@ -87,21 +113,20 @@ fn run(listener: UnixListener) {
             .arg(COMMAND)
             .spawn()
             .expect("failed to start");
-
+        block_for_window();
         loop {
             if let Ok(msg) = rx.recv() {
                 match msg.as_str() {
                     "open" => {
                         if let Ok(Some(status)) = program.try_wait() {
-                            info!("Program has exited ({status}). Restarting.");
+                            info!("Program has exited ({}). Restarting.", status);
                             program = Command::new("sh")
                                 .arg("-c")
                                 .arg(COMMAND)
                                 .spawn()
                                 .expect("failed to start");
-                        } else {
-                            x11::map_qurop_window();
                         }
+                        block_for_window();
                     }
                     "close" => {
                         info!("Closing");
@@ -112,7 +137,7 @@ fn run(listener: UnixListener) {
                     command if command.starts_with("unmap:") => {
                         x11::unmap_window(command.split(':').last().unwrap().parse().unwrap())
                     }
-                    _ => info!("Unknown: '{msg}'"),
+                    _ => info!("Unknown: '{}'", msg),
                 }
             }
         }

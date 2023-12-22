@@ -5,4 +5,6 @@ pub enum Error {
         #[from]
         source: std::io::Error,
     },
+    #[error("The window is not found")]
+    WindowNotFound,
 }
