@@ -192,9 +192,9 @@ pub(crate) fn handle_window(tx: mpsc::Sender<String>, ctx: &Arc<RwLock<crate::Co
             if e.atom == active_atom {
                 if let Ok(active_window) = get_active_window(&connection, screen, active_atom) {
                     if active_window != window_id {
-                        debug!("sending unmap request: {} != {}", active_window, window_id);
-                        tx.send(format!("unmap:{window_id}"))
-                            .expect("couldn't send unmap command");
+                        debug!("sending hide request: {} != {}", active_window, window_id);
+                        tx.send(format!("hide:{window_id}"))
+                            .expect("couldn't send hide command");
                     }
                 }
             }
@@ -238,6 +238,7 @@ pub(crate) fn map_qurop_window(matcher: &WindowMatcher) -> Result<u32, Error> {
         .map_window(qurop_window_id)
         .expect("could not map window");
     connection.flush().expect("couldn't flush");
+    connection.sync().expect("couldn't sync");
     Ok(qurop_window_id)
 }
 
@@ -249,12 +250,6 @@ pub(crate) fn position_window(window_id: u32) {
     let height = ((screen.height_in_pixels as f64) * 0.5) as u32;
     let x_pos = ((screen.width_in_pixels as f64) * ((1.0 - 0.66) / 2.0)) as i32;
     let atoms = Atoms::new(&connection).unwrap().reply().unwrap();
-    let window_config = ConfigureWindowAux::new()
-        .height(Some(height))
-        .width(Some(width))
-        .border_width(Some(0))
-        .x(Some(x_pos))
-        .y(Some(0));
     connection
         .change_property32(
             PropMode::REPLACE,
@@ -273,6 +268,12 @@ pub(crate) fn position_window(window_id: u32) {
             &[2, 0, 0, 0, 0],
         )
         .expect("setting motif property");
+    let window_config = ConfigureWindowAux::new()
+        .height(Some(height))
+        .width(Some(width))
+        .border_width(Some(0))
+        .x(Some(x_pos))
+        .y(Some(0));
     if log_enabled!(log::Level::Debug) {
         let old_config = connection
             .get_geometry(window_id)
@@ -287,6 +288,8 @@ pub(crate) fn position_window(window_id: u32) {
     connection
         .configure_window(window_id, &window_config)
         .expect("couldn't configure window");
+    // This is a hack. Give the program a smidge of time to be able to respond to resize events.
+    thread::sleep(Duration::from_millis(100));
     connection.flush().expect("couldn't flush");
     connection.sync().expect("couldn't sync");
 }

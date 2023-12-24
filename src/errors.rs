@@ -7,4 +7,9 @@ pub enum Error {
     },
     #[error("The window is not found")]
     WindowNotFound,
+    #[error("Configuration error: {source}")]
+    Config {
+        #[from]
+        source: confy::ConfyError,
+    },
 }
