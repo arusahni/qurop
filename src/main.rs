@@ -20,6 +20,9 @@ use directories::ProjectDirs;
 use tracing::{debug, info, trace, warn};
 
 use errors::Error;
+use tracing_subscriber::{
+    fmt::writer::MakeWriterExt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter,
+};
 use utils::abort;
 
 #[derive(Debug)]
@@ -228,8 +231,25 @@ struct Instance {
 }
 
 fn main() -> Result<(), Error> {
-    tracing_subscriber::fmt::init();
     let args = cli::Args::parse();
+    if let Some(level) = args.persist_verbosity {
+        println!("Level: {:?}", level);
+        let project =
+            ProjectDirs::from("net", "arusahni", "qurop").expect("could not find project dirs");
+        let state_dir = project.state_dir().unwrap();
+        let logfile =
+            tracing_appender::rolling::hourly(state_dir, "main.log").with_max_level(level);
+        tracing_subscriber::fmt()
+            .with_writer(std::io::stdout.and(logfile))
+            .with_env_filter(EnvFilter::from_env("QUROP_LOG"))
+            .init();
+    } else {
+        // tracing_subscriber::fmt::init();
+        tracing_subscriber::registry()
+            .with(tracing_subscriber::fmt::layer())
+            .with(EnvFilter::from_env("QUROP_LOG"))
+            .init();
+    }
     let config = config::get_config().unwrap_or_else(|err| panic!("Invalid configuration: {err}"));
     let (action, instance_name) = match args.command {
         cli::Command::Add {

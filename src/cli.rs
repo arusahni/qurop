@@ -66,6 +66,8 @@ pub enum Command {
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub struct Args {
+    #[arg(long)]
+    pub persist_verbosity: Option<tracing::Level>,
     #[command(subcommand)]
     pub command: Command,
 }
