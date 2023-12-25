@@ -27,6 +27,17 @@ x11rb::atom_manager! {
     }
 }
 
+trait QuropConnectionExt {
+    fn flush_and_sync(&self);
+}
+
+impl QuropConnectionExt for x11rb::rust_connection::RustConnection {
+    fn flush_and_sync(&self) {
+        self.flush().expect("couldn't flush to x11");
+        self.sync().expect("couldn't sync with x11");
+    }
+}
+
 /// Find the window that is currently active on the given screen
 pub(crate) fn get_active_window(
     connection: &x11rb::rust_connection::RustConnection,
@@ -58,8 +69,7 @@ pub(crate) fn get_qurop_window_id(
     root: u32,
     matcher: &WindowMatcher,
 ) -> Option<u32> {
-    connection.flush().expect("couldn't flush");
-    connection.sync().expect("couldn't sync");
+    connection.flush_and_sync();
     let response = connection
         .query_tree(root)
         .expect("unable to query tree")
@@ -69,14 +79,17 @@ pub(crate) fn get_qurop_window_id(
     response.children.into_iter().find(|child| match matcher {
         WindowMatcher::WmClass(qurop_class) => {
             if let Some(class_name) = get_window_class(connection, *child) {
-                trace!("Found class {class_name} ({child})");
+                // trace!("Found class {class_name} ({child})");
                 class_name == *qurop_class
             } else {
                 false
             }
         }
         WindowMatcher::ProcessId(process_id) => match get_window_pid(connection, *child, atoms) {
-            Some(window_process_id) => *process_id == Some(window_process_id),
+            Some(window_process_id) => {
+                // trace!("Found pid {window_process_id} ({child})");
+                *process_id == Some(window_process_id)
+            }
             None => false,
         },
     })
@@ -138,7 +151,7 @@ pub(crate) fn get_window_pid(
         let val = &vals.next().expect("no values");
         Some(*val)
     } else {
-        // trace!("couldn't find value");
+        // trace!("couldn't find pid for {window_id}");
         None
     }
 }
@@ -150,28 +163,22 @@ pub(crate) fn handle_window(tx: mpsc::Sender<String>, ctx: &Arc<RwLock<crate::Co
     let root = screen.root;
     let atoms = Atoms::new(&connection).unwrap().reply().unwrap();
     let active_atom = atoms._NET_ACTIVE_WINDOW;
-    debug!(
-        "window handler: Root {:?} | active_atom {}",
-        root, active_atom
-    );
     let mut count = 0;
+    connection.flush_and_sync();
     let window_id = loop {
-        trace!("window handler blocking for window id");
-        {
-            let matcher = &ctx.read().unwrap().matcher;
-            let window_id = get_qurop_window_id(&connection, root, matcher);
-            if let Some(window_id) = window_id {
-                break window_id;
+        match ctx.read().unwrap().window_id {
+            Some(win_id) => break win_id,
+            None => {
+                count += 1;
+                if count == 5 {
+                    warn!("could not find window in {} attempts", count);
+                    thread::sleep(Duration::from_millis(100));
+                }
+                if count > 5000000 {
+                    panic!("could not find window in {} attempts", count);
+                }
             }
-        }
-        count += 1;
-        if count == 5 {
-            warn!("could not find window in {} attempts", count);
-            thread::sleep(Duration::from_millis(100));
-        }
-        if count > 10 {
-            panic!("could not find window in {} attempts", count);
-        }
+        };
     };
     let active_class = get_window_class(&connection, window_id).unwrap_or_else(|| "unknown".into());
     let active_name = get_window_name(&connection, window_id, atoms);
@@ -202,18 +209,35 @@ pub(crate) fn handle_window(tx: mpsc::Sender<String>, ctx: &Arc<RwLock<crate::Co
     }
 }
 
+/// Determine if the window corresponding to the matcher is currently active.
+pub(crate) fn window_is_active(window_id: u32) -> bool {
+    let (connection, num) = x11rb::connect(None).expect("x11 connection missing");
+    let screen = &connection.setup().roots[num];
+    connection.flush_and_sync();
+    let atoms = Atoms::new(&connection).unwrap().reply().unwrap();
+    if let Ok(active_window) = get_active_window(&connection, screen, atoms._NET_ACTIVE_WINDOW) {
+        trace!("Active window ID: {}", active_window);
+        return active_window == window_id;
+    }
+    false
+}
+
 /// Unmap the qurop window.
 pub(crate) fn unmap_qurop_window(matcher: &WindowMatcher) {
     trace!("unmapping qurop");
     let (connection, num) = x11rb::connect(None).expect("x11 connection missing");
     let screen = &connection.setup().roots[num];
-    let qurop_window_id =
-        get_qurop_window_id(&connection, screen.root, matcher).expect("could not find window");
+    let qurop_window_id = match get_qurop_window_id(&connection, screen.root, matcher) {
+        Some(win_id) => win_id,
+        None => {
+            debug!("No window found");
+            return;
+        }
+    };
     info!("Unmapping qurop window: {qurop_window_id}");
     connection
         .unmap_window(qurop_window_id)
         .expect("could not unmap window");
-    connection.flush().expect("couldn't flush");
 }
 
 /// Unmap the specified window.
@@ -223,23 +247,27 @@ pub(crate) fn unmap_window(window_id: u32) {
     connection
         .unmap_window(window_id)
         .expect("could not unmap window");
-    connection.flush().expect("couldn't flush");
+    connection.flush_and_sync();
 }
 
 /// Map the qurop window.
 pub(crate) fn map_qurop_window(matcher: &WindowMatcher) -> Result<u32, Error> {
-    trace!("mapping qurop");
     let (connection, num) = x11rb::connect(None).expect("x11 connection missing");
     let screen = &connection.setup().roots[num];
     let qurop_window_id = get_qurop_window_id(&connection, screen.root, matcher)
         .ok_or_else(|| Error::WindowNotFound)?;
     info!("Mapping qurop window: {qurop_window_id}");
-    connection
-        .map_window(qurop_window_id)
-        .expect("could not map window");
-    connection.flush().expect("couldn't flush");
-    connection.sync().expect("couldn't sync");
+    map_window(qurop_window_id);
     Ok(qurop_window_id)
+}
+
+pub(crate) fn map_window(window_id: u32) {
+    let (connection, _num) = x11rb::connect(None).expect("x11 connection missing");
+    info!("Mapping window: {window_id}");
+    connection
+        .map_window(window_id)
+        .expect("could not map window");
+    connection.flush_and_sync();
 }
 
 /// Position the window and set decoration properties.

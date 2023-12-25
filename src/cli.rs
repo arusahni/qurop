@@ -56,6 +56,11 @@ pub enum Command {
         /// the name of the application instance
         name: String,
     },
+    /// Hide an application instance, or show it.
+    Toggle {
+        /// the name of the application instance
+        name: String,
+    },
 }
 
 #[derive(Parser, Debug)]

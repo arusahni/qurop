@@ -22,6 +22,7 @@ use log::{debug, info, trace, warn};
 use errors::Error;
 use utils::abort;
 
+#[derive(Debug)]
 enum StreamState {
     New(UnixListener),
     Exists(UnixStream),
@@ -80,7 +81,9 @@ fn handle_socket_messages(listener: UnixListener, tx: mpsc::Sender<String>) -> R
         stream.read_to_string(&mut command)?;
         debug!("Received: {}", command);
         match command.as_str() {
-            "open" | "kill" => tx.send(command.clone()).expect("command should send"),
+            "open" | "toggle" | "hide" | "kill" => {
+                tx.send(command.clone()).expect("command should send")
+            }
             "term" => break,
             _ => warn!("Unrecognized command: {}", command),
         }
@@ -88,14 +91,15 @@ fn handle_socket_messages(listener: UnixListener, tx: mpsc::Sender<String>) -> R
     Ok(())
 }
 
-fn block_for_window(matcher: &x11::WindowMatcher) {
+/// Find and position the window
+fn block_for_window(matcher: &x11::WindowMatcher) -> u32 {
     trace!("blocking for window {:?}", matcher);
     let mut count = 0;
     loop {
         match x11::map_qurop_window(matcher) {
             Ok(window_id) => {
                 x11::position_window(window_id);
-                return;
+                return window_id;
             }
             Err(Error::WindowNotFound) => {
                 trace!("window not found");
@@ -115,12 +119,14 @@ fn block_for_window(matcher: &x11::WindowMatcher) {
 
 pub(crate) struct Context {
     pub matcher: x11::WindowMatcher,
+    pub window_id: Option<u32>,
 }
 
 fn run(listener: UnixListener, instance: Instance) {
     let (tx, rx) = mpsc::channel::<String>();
     let ctx = Arc::new(RwLock::new(Context {
         matcher: instance.matcher.clone(),
+        window_id: None,
     }));
     let program_ctx = Arc::clone(&ctx);
     let program_manager = thread::spawn(move || {
@@ -129,17 +135,34 @@ fn run(listener: UnixListener, instance: Instance) {
             .arg(instance.command.clone())
             .spawn()
             .expect("failed to start");
+        info!("[{}] Started PID: {}", instance.name, program.id());
         {
-            let matcher = &mut program_ctx.write().unwrap().matcher;
-            if matches!(matcher, x11::WindowMatcher::ProcessId(_)) {
-                trace!("[{}] Setting new pid {}", instance.name, program.id());
-                *matcher = x11::WindowMatcher::ProcessId(Some(program.id()));
+            let ctx = &mut program_ctx.write().unwrap();
+            if matches!(ctx.matcher, x11::WindowMatcher::ProcessId(_)) {
+                ctx.matcher = x11::WindowMatcher::ProcessId(Some(program.id()));
+                trace!("[{}] Set a new PID {}", instance.name, program.id());
             }
+            ctx.window_id = Some(block_for_window(&ctx.matcher));
+            trace!(
+                "[{}] Set a new Window ID {:?}",
+                instance.name,
+                ctx.window_id
+            );
         }
-        block_for_window(&program_ctx.clone().read().unwrap().matcher);
         loop {
             if let Ok(msg) = rx.recv() {
-                match msg.as_str() {
+                let action = if msg == "toggle" {
+                    let win_id = program_ctx.read().unwrap().window_id;
+                    if win_id.is_some() && x11::window_is_active(win_id.unwrap()) {
+                        "hide".into()
+                    } else {
+                        "open".into()
+                    }
+                } else {
+                    msg.clone()
+                };
+                debug!("[{}] Taking action: '{}'", instance.name, action);
+                match action.as_str() {
                     "open" => {
                         let ctx = program_ctx.clone();
                         if let Ok(Some(status)) = program.try_wait() {
@@ -158,9 +181,12 @@ fn run(listener: UnixListener, instance: Instance) {
                                 ctx_writer.matcher =
                                     x11::WindowMatcher::ProcessId(Some(program.id()));
                             }
+                            ctx_writer.window_id = Some(block_for_window(&ctx_writer.matcher));
+                        } else {
+                            let window_id = ctx.read().unwrap().window_id.unwrap();
+                            x11::map_window(window_id);
+                            x11::position_window(window_id);
                         }
-                        let lock = &ctx.read().unwrap();
-                        block_for_window(&lock.matcher);
                     }
                     "kill" => {
                         info!("[{}] Killing", instance.name);
@@ -170,12 +196,15 @@ fn run(listener: UnixListener, instance: Instance) {
                     "hide" => {
                         let ctx = program_ctx.clone();
                         let lock = ctx.read().unwrap();
-                        x11::unmap_qurop_window(&lock.matcher);
+                        match lock.window_id {
+                            Some(window_id) => x11::unmap_window(window_id),
+                            None => x11::unmap_qurop_window(&lock.matcher),
+                        }
                     }
                     command if command.starts_with("hide:") => {
                         x11::unmap_window(command.split(':').last().unwrap().parse().unwrap())
                     }
-                    _ => info!("[{}] Unknown: '{}'", instance.name, msg),
+                    _ => info!("[{}] Unknown: '{}' ({})", instance.name, msg, action),
                 }
             }
         }
@@ -216,6 +245,7 @@ fn main() -> Result<(), Error> {
         cli::Command::Open { name } => ("open", name),
         cli::Command::Kill { name } => ("kill", name),
         cli::Command::Hide { name } => ("hide", name),
+        cli::Command::Toggle { name } => ("toggle", name),
     };
     let instance = config.instances.get(&instance_name).unwrap_or_else(|| {
         abort(&format!(
