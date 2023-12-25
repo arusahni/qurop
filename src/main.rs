@@ -244,7 +244,6 @@ fn main() -> Result<(), Error> {
             .with_env_filter(EnvFilter::from_env("QUROP_LOG"))
             .init();
     } else {
-        // tracing_subscriber::fmt::init();
         tracing_subscriber::registry()
             .with(tracing_subscriber::fmt::layer())
             .with(EnvFilter::from_env("QUROP_LOG"))

@@ -1,8 +1,8 @@
 use std::{collections::BTreeMap, fs::create_dir_all, path::PathBuf};
 
 use directories::ProjectDirs;
-use tracing::debug;
 use serde::{Deserialize, Serialize};
+use tracing::debug;
 
 use crate::{errors::Error, utils::abort};
 

@@ -296,18 +296,33 @@ pub(crate) fn position_window(window_id: u32) {
             &[2, 0, 0, 0, 0],
         )
         .expect("setting motif property");
-    let window_config = ConfigureWindowAux::new()
+    // We split positioning and resizing due to needing a messy hack to address possible races with
+    // application startup. Certain terminal emulators, such as Wezterm, don't register resize
+    // events until a certain point in their startup. Sleeping for 100ms seems to handle this well
+    // enough, but it adds some visual jank if the window launches centered and then snaps to the
+    // top of the screen after 100ms. By immediately positioning it at the top and then resizing,
+    // we can minimize the jank.
+    let window_position_config = ConfigureWindowAux::new().x(Some(x_pos)).y(Some(0));
+    debug!(
+        "Positioning window {} to: {:?}",
+        window_id, window_position_config
+    );
+    connection
+        .configure_window(window_id, &window_position_config)
+        .expect("couldn't configure window");
+    connection.flush_and_sync();
+    let window_geometry_config = ConfigureWindowAux::new()
         .height(Some(height))
         .width(Some(width))
-        .border_width(Some(0))
-        .x(Some(x_pos))
-        .y(Some(0));
-    debug!("Positioning window {} to: {:?}", window_id, window_config);
+        .border_width(Some(0));
+    debug!(
+        "Resizing window {} to: {:?}",
+        window_id, window_geometry_config
+    );
     connection
-        .configure_window(window_id, &window_config)
+        .configure_window(window_id, &window_geometry_config)
         .expect("couldn't configure window");
-    // This is a hack. Give the program a smidge of time to be able to respond to resize events.
+    // Ugly hack that makes me sad.
     thread::sleep(Duration::from_millis(100));
-    connection.flush().expect("couldn't flush");
-    connection.sync().expect("couldn't sync");
+    connection.flush_and_sync();
 }
