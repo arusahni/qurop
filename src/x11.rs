@@ -1,9 +1,9 @@
-use log::{debug, info, log_enabled, trace, warn};
 use std::{
     sync::{mpsc, Arc, RwLock},
     thread,
     time::Duration,
 };
+use tracing::{debug, info, trace, warn};
 use x11rb::{
     connection::Connection,
     properties::WmClass,
@@ -302,17 +302,7 @@ pub(crate) fn position_window(window_id: u32) {
         .border_width(Some(0))
         .x(Some(x_pos))
         .y(Some(0));
-    if log_enabled!(log::Level::Debug) {
-        let old_config = connection
-            .get_geometry(window_id)
-            .expect("could not get geometry")
-            .reply()
-            .expect("could not read geometry reply");
-        debug!(
-            "Positioning window {}. old: {:?}, new: {:?}",
-            window_id, old_config, window_config
-        );
-    }
+    debug!("Positioning window {} to: {:?}", window_id, window_config);
     connection
         .configure_window(window_id, &window_config)
         .expect("couldn't configure window");

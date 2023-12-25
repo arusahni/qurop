@@ -17,7 +17,7 @@ use std::{
 
 use clap::Parser;
 use directories::ProjectDirs;
-use log::{debug, info, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 use errors::Error;
 use utils::abort;
@@ -228,7 +228,7 @@ struct Instance {
 }
 
 fn main() -> Result<(), Error> {
-    env_logger::init();
+    tracing_subscriber::fmt::init();
     let args = cli::Args::parse();
     let config = config::get_config().unwrap_or_else(|err| panic!("Invalid configuration: {err}"));
     let (action, instance_name) = match args.command {
