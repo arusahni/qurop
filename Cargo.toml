@@ -1,7 +1,13 @@
 [package]
 name = "qurop"
+description = "Turn applications into Quake-style dropdowns."
 version = "0.1.0"
+authors = ["Aru Sahni <aru@arusahni.net>"]
 edition = "2021"
+license = "MPL-2.0"
+repository = "https://www.github.com/arusahni/qurop"
+keywords = ["x11", "utility", "terminal"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 clap = { version = "4.4.8", features = ["derive"] }
