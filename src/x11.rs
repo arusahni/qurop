@@ -1,7 +1,7 @@
 use std::{
     sync::{mpsc, Arc, RwLock},
     thread,
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 use tracing::{debug, info, trace, warn};
 use x11rb::{
@@ -163,8 +163,9 @@ pub(crate) fn handle_window(tx: mpsc::Sender<String>, ctx: &Arc<RwLock<crate::Co
     let root = screen.root;
     let atoms = Atoms::new(&connection).unwrap().reply().unwrap();
     let active_atom = atoms._NET_ACTIVE_WINDOW;
-    let mut count = 0;
     connection.flush_and_sync();
+    let mut count = 0;
+    let start = SystemTime::now();
     let window_id = loop {
         match ctx.read().unwrap().window_id {
             Some(win_id) => break win_id,
@@ -174,8 +175,8 @@ pub(crate) fn handle_window(tx: mpsc::Sender<String>, ctx: &Arc<RwLock<crate::Co
                     warn!("could not find window in {} attempts", count);
                     thread::sleep(Duration::from_millis(100));
                 }
-                if count > 5000000 {
-                    panic!("could not find window in {} attempts", count);
+                if SystemTime::now().duration_since(start).unwrap() > Duration::from_secs(5) {
+                    panic!("could not find window in 5 seconds and {} attempts", count);
                 }
             }
         };

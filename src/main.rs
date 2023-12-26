@@ -15,7 +15,7 @@ use std::{
         mpsc, Arc, RwLock,
     },
     thread,
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use clap::Parser;
@@ -112,6 +112,7 @@ fn handle_socket_messages(listener: UnixListener, tx: mpsc::Sender<String>) -> R
 fn block_for_window(matcher: &x11::WindowMatcher) -> u32 {
     trace!("blocking for window {:?}", matcher);
     let mut count = 0;
+    let start = SystemTime::now();
     loop {
         match x11::map_qurop_window(matcher) {
             Ok(window_id) => {
@@ -128,8 +129,11 @@ fn block_for_window(matcher: &x11::WindowMatcher) -> u32 {
             warn!("could not find window in {} attempts", count);
             thread::sleep(Duration::from_millis(100));
         }
-        if count > 20 {
-            panic!("could not find window in {} attempts", count);
+        if SystemTime::now().duration_since(start).unwrap() > Duration::from_secs(5) {
+            panic!(
+                "could not find window after 5 seconds and {} attempts",
+                count
+            );
         }
     }
 }
