@@ -63,6 +63,20 @@ pub(crate) enum WindowMatcher {
     WmClass(String),
 }
 
+fn query_windows(connection: &x11rb::rust_connection::RustConnection, root: u32) -> Vec<u32> {
+    let tree = connection
+        .query_tree(root)
+        .expect("unable to query tree")
+        .reply()
+        .unwrap();
+    let mut windows = vec![];
+    for child in tree.children {
+        windows.push(child);
+        windows.extend(query_windows(connection, child));
+    }
+    windows
+}
+
 /// Get the ID of the managed window
 pub(crate) fn get_qurop_window_id(
     connection: &x11rb::rust_connection::RustConnection,
@@ -70,13 +84,9 @@ pub(crate) fn get_qurop_window_id(
     matcher: &WindowMatcher,
 ) -> Option<u32> {
     connection.flush_and_sync();
-    let response = connection
-        .query_tree(root)
-        .expect("unable to query tree")
-        .reply()
-        .unwrap();
     let atoms = Atoms::new(connection).unwrap().reply().unwrap();
-    response.children.into_iter().find(|child| match matcher {
+    let windows = query_windows(connection, root);
+    windows.into_iter().find(|child| match matcher {
         WindowMatcher::WmClass(qurop_class) => {
             if let Some(class_name) = get_window_class(connection, *child) {
                 // trace!("Found class {class_name} ({child})");
@@ -142,17 +152,17 @@ pub(crate) fn get_window_pid(
         0,
         1024,
     );
-    if let Some(mut vals) = property
-        .expect("couldn't get property")
-        .reply()
-        .expect("couldn't read response")
-        .value32()
-    {
-        let val = &vals.next().expect("no values");
-        Some(*val)
-    } else {
-        // trace!("couldn't find pid for {window_id}");
-        None
+    match property.expect("couldn't get property").reply() {
+        Ok(reply) => {
+            if let Some(mut vals) = reply.value32() {
+                let val = &vals.next().expect("no values");
+                Some(*val)
+            } else {
+                // trace!("couldn't find pid for {window_id}");
+                None
+            }
+        }
+        Err(_) => None,
     }
 }
 
@@ -167,15 +177,17 @@ pub(crate) fn handle_window(tx: mpsc::Sender<String>, ctx: &Arc<RwLock<crate::Co
     let mut count = 0;
     let start = SystemTime::now();
     let window_id = loop {
-        match ctx.read().unwrap().window_id {
+        let ctx_win = { ctx.read().unwrap().window_id };
+        match ctx_win {
             Some(win_id) => break win_id,
             None => {
                 count += 1;
-                if count == 5 {
-                    warn!("could not find window in {} attempts", count);
+                if count % 5 == 0 {
+                    warn!("window not provided in {} attempts", count);
                     thread::sleep(Duration::from_millis(100));
-                }
-                if SystemTime::now().duration_since(start).unwrap() > Duration::from_secs(5) {
+                    connection.flush_and_sync();
+                } else if SystemTime::now().duration_since(start).unwrap() > Duration::from_secs(5)
+                {
                     panic!("could not find window in 5 seconds and {} attempts", count);
                 }
             }
