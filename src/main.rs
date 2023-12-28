@@ -109,14 +109,14 @@ fn handle_socket_messages(listener: UnixListener, tx: mpsc::Sender<String>) -> R
 }
 
 /// Find and position the window
-fn block_for_window(matcher: &x11::WindowMatcher) -> u32 {
+fn block_for_window(matcher: &x11::WindowMatcher, window_delay: Option<u64>) -> u32 {
     trace!("blocking for window {:?}", matcher);
     let mut count = 0;
     let start = SystemTime::now();
     loop {
         match x11::map_qurop_window(matcher) {
             Ok(window_id) => {
-                x11::position_window(window_id);
+                x11::position_window(window_id, window_delay);
                 return window_id;
             }
             Err(Error::WindowNotFound) => {
@@ -160,7 +160,7 @@ pub(crate) fn program_thread(
             write_ctx.matcher = x11::WindowMatcher::ProcessId(Some(program.id()));
             trace!("[{}] Set a new PID {}", instance.name, program.id());
         }
-        write_ctx.window_id = Some(block_for_window(&write_ctx.matcher));
+        write_ctx.window_id = Some(block_for_window(&write_ctx.matcher, instance.window_delay));
         trace!(
             "[{}] Set a new Window ID {:?}",
             instance.name,
@@ -198,11 +198,12 @@ pub(crate) fn program_thread(
                             trace!("[{}] Setting new pid {}", instance.name, program.id());
                             write_ctx.matcher = x11::WindowMatcher::ProcessId(Some(program.id()));
                         }
-                        write_ctx.window_id = Some(block_for_window(&write_ctx.matcher));
+                        write_ctx.window_id =
+                            Some(block_for_window(&write_ctx.matcher, instance.window_delay));
                     } else {
                         let window_id = read_ctx.read().unwrap().window_id.unwrap();
                         x11::map_window(window_id);
-                        x11::position_window(window_id);
+                        x11::position_window(window_id, instance.window_delay);
                     }
                 }
                 "kill" => {
@@ -277,6 +278,7 @@ struct Instance {
     name: String,
     command: String,
     matcher: x11::WindowMatcher,
+    window_delay: Option<u64>,
 }
 
 fn main() -> Result<(), Error> {
@@ -333,6 +335,7 @@ fn main() -> Result<(), Error> {
             ),
             config::WindowMatcher::Process => x11::WindowMatcher::ProcessId(None),
         },
+        window_delay: instance.window_delay_ms.or(Some(100)),
     };
     match get_socket(&instance_name)? {
         StreamState::Exists(mut stream) => {

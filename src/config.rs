@@ -26,6 +26,8 @@ pub(crate) struct Instance {
     pub(crate) matcher: WindowMatcher,
     #[serde(default)]
     pub(crate) class_name: Option<String>,
+    #[serde(default)]
+    pub(crate) window_delay_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -65,6 +67,7 @@ pub fn add_instance(
             command: command.into(),
             matcher,
             class_name,
+            window_delay_ms: None,
         },
     );
     let file_path = get_config_path()?;

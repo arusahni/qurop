@@ -284,7 +284,7 @@ pub(crate) fn map_window(window_id: u32) {
 }
 
 /// Position the window and set decoration properties.
-pub(crate) fn position_window(window_id: u32) {
+pub(crate) fn position_window(window_id: u32, window_delay: Option<u64>) {
     let (connection, num) = x11rb::connect(None).expect("x11 connection missing");
     let screen = &connection.setup().roots[num];
     let width = ((screen.width_in_pixels as f64) * 0.66) as u32;
@@ -335,7 +335,9 @@ pub(crate) fn position_window(window_id: u32) {
     connection
         .configure_window(window_id, &window_geometry_config)
         .expect("couldn't configure window");
-    // Ugly hack that makes me sad.
-    thread::sleep(Duration::from_millis(100));
+    if let Some(window_delay_ms) = window_delay {
+        // Ugly hack that makes me sad.
+        thread::sleep(Duration::from_millis(window_delay_ms));
+    }
     connection.flush_and_sync();
 }
