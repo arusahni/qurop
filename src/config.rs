@@ -4,7 +4,7 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-use crate::{errors::Error, utils::abort, structs::WindowGeometry};
+use crate::{errors::Error, structs::WindowGeometry, utils::abort};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]

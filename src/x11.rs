@@ -11,7 +11,10 @@ use x11rb::{
     wrapper::ConnectionExt as WrapperConnectionExt,
 };
 
-use crate::{errors::Error, structs::Instance};
+use crate::{
+    errors::Error,
+    structs::{Instance, WindowMatcher},
+};
 
 x11rb::atom_manager! {
     pub(crate) Atoms:
@@ -55,12 +58,6 @@ pub(crate) fn get_active_window(
     }
 
     Ok(response.to_owned().value32().unwrap().next().unwrap())
-}
-
-#[derive(Debug, Clone)]
-pub(crate) enum WindowMatcher {
-    ProcessId(Option<u32>),
-    WmClass(String),
 }
 
 fn query_windows(connection: &x11rb::rust_connection::RustConnection, root: u32) -> Vec<u32> {

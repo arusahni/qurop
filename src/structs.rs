@@ -1,12 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-use crate::x11;
-
 #[derive(Debug, Clone)]
 pub(crate) struct Instance {
     pub(crate) name: String,
     pub(crate) command: String,
-    pub(crate) matcher: x11::WindowMatcher,
+    pub(crate) matcher: WindowMatcher,
     pub(crate) window_delay: Option<u64>,
     pub(crate) geometry: WindowGeometry,
 }
@@ -46,4 +44,15 @@ impl WindowGeometry {
         };
         (width, height)
     }
+}
+
+pub(crate) struct Context {
+    pub matcher: WindowMatcher,
+    pub window_id: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum WindowMatcher {
+    ProcessId(Option<u32>),
+    WmClass(String),
 }

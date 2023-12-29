@@ -24,7 +24,7 @@ use directories::ProjectDirs;
 use tracing::{debug, error, info, trace, warn};
 
 use errors::Error;
-use structs::{Instance, WindowGeometry};
+use structs::{Context, Instance, WindowGeometry, WindowMatcher};
 use tracing_subscriber::{
     fmt::writer::MakeWriterExt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter,
 };
@@ -111,7 +111,7 @@ fn handle_socket_messages(listener: UnixListener, tx: mpsc::Sender<String>) -> R
 }
 
 /// Find and position the window
-fn block_for_window(matcher: &x11::WindowMatcher, instance: &Instance) -> u32 {
+fn block_for_window(matcher: &WindowMatcher, instance: &Instance) -> u32 {
     trace!("blocking for window {:?}", matcher);
     let mut count = 0;
     let start = SystemTime::now();
@@ -140,11 +140,6 @@ fn block_for_window(matcher: &x11::WindowMatcher, instance: &Instance) -> u32 {
     }
 }
 
-pub(crate) struct Context {
-    pub matcher: x11::WindowMatcher,
-    pub window_id: Option<u32>,
-}
-
 pub(crate) fn program_thread(
     rx: mpsc::Receiver<String>,
     instance: Instance,
@@ -158,8 +153,8 @@ pub(crate) fn program_thread(
     info!("[{}] Started PID: {}", instance.name, program.id());
     {
         let write_ctx = &mut ctx.write().unwrap();
-        if matches!(write_ctx.matcher, x11::WindowMatcher::ProcessId(_)) {
-            write_ctx.matcher = x11::WindowMatcher::ProcessId(Some(program.id()));
+        if matches!(write_ctx.matcher, WindowMatcher::ProcessId(_)) {
+            write_ctx.matcher = WindowMatcher::ProcessId(Some(program.id()));
             trace!("[{}] Set a new PID {}", instance.name, program.id());
         }
         write_ctx.window_id = Some(block_for_window(&write_ctx.matcher, &instance));
@@ -196,9 +191,9 @@ pub(crate) fn program_thread(
                             .arg(instance.command.clone())
                             .spawn()
                             .expect("failed to start");
-                        if matches!(write_ctx.matcher, x11::WindowMatcher::ProcessId(_)) {
+                        if matches!(write_ctx.matcher, WindowMatcher::ProcessId(_)) {
                             trace!("[{}] Setting new pid {}", instance.name, program.id());
-                            write_ctx.matcher = x11::WindowMatcher::ProcessId(Some(program.id()));
+                            write_ctx.matcher = WindowMatcher::ProcessId(Some(program.id()));
                         }
                         write_ctx.window_id = Some(block_for_window(&write_ctx.matcher, &instance));
                     } else {
@@ -323,13 +318,13 @@ fn main() -> Result<(), Error> {
         name: instance_name.clone(),
         command: instance.command.clone(),
         matcher: match instance.matcher {
-            config::WindowMatcher::Class => x11::WindowMatcher::WmClass(
+            config::WindowMatcher::Class => WindowMatcher::WmClass(
                 instance
                     .class_name
                     .clone()
                     .unwrap_or_else(|| abort("'class_name' must be specified")),
             ),
-            config::WindowMatcher::Process => x11::WindowMatcher::ProcessId(None),
+            config::WindowMatcher::Process => WindowMatcher::ProcessId(None),
         },
         window_delay: instance.window_delay_ms.or(Some(100)),
         geometry: instance.geometry.clone().unwrap_or_else(|| WindowGeometry {
