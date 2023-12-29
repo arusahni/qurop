@@ -200,8 +200,6 @@ pub(crate) fn program_thread(
                         let window_id = read_ctx.read().unwrap().window_id.unwrap();
                         x11::map_window(window_id);
                         x11::position_window(window_id, &instance);
-                        thread::sleep(Duration::from_millis(100));
-                        x11::focus_window(window_id);
                     }
                 }
                 "kill" => {
