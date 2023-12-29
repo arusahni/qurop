@@ -11,7 +11,7 @@ use x11rb::{
     wrapper::ConnectionExt as WrapperConnectionExt,
 };
 
-use crate::errors::Error;
+use crate::{errors::Error, structs::Instance};
 
 x11rb::atom_manager! {
     pub(crate) Atoms:
@@ -284,12 +284,13 @@ pub(crate) fn map_window(window_id: u32) {
 }
 
 /// Position the window and set decoration properties.
-pub(crate) fn position_window(window_id: u32, window_delay: Option<u64>) {
+pub(crate) fn position_window(window_id: u32, instance: &Instance) {
     let (connection, num) = x11rb::connect(None).expect("x11 connection missing");
     let screen = &connection.setup().roots[num];
-    let width = ((screen.width_in_pixels as f64) * 0.66) as u32;
-    let height = ((screen.height_in_pixels as f64) * 0.5) as u32;
-    let x_pos = ((screen.width_in_pixels as f64) * ((1.0 - 0.66) / 2.0)) as i32;
+    let (width, height) = instance
+        .geometry
+        .get_dimensions(screen.width_in_pixels, screen.height_in_pixels);
+    let x_pos = ((screen.width_in_pixels as u32 - width) / 2) as i32;
     let atoms = Atoms::new(&connection).unwrap().reply().unwrap();
     connection
         .change_property32(
@@ -335,7 +336,7 @@ pub(crate) fn position_window(window_id: u32, window_delay: Option<u64>) {
     connection
         .configure_window(window_id, &window_geometry_config)
         .expect("couldn't configure window");
-    if let Some(window_delay_ms) = window_delay {
+    if let Some(window_delay_ms) = instance.window_delay {
         // Ugly hack that makes me sad.
         thread::sleep(Duration::from_millis(window_delay_ms));
     }

@@ -1,6 +1,7 @@
 mod cli;
 mod config;
 mod errors;
+mod structs;
 mod utils;
 mod x11;
 
@@ -23,6 +24,7 @@ use directories::ProjectDirs;
 use tracing::{debug, error, info, trace, warn};
 
 use errors::Error;
+use structs::{Instance, WindowGeometry};
 use tracing_subscriber::{
     fmt::writer::MakeWriterExt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter,
 };
@@ -109,14 +111,14 @@ fn handle_socket_messages(listener: UnixListener, tx: mpsc::Sender<String>) -> R
 }
 
 /// Find and position the window
-fn block_for_window(matcher: &x11::WindowMatcher, window_delay: Option<u64>) -> u32 {
+fn block_for_window(matcher: &x11::WindowMatcher, instance: &Instance) -> u32 {
     trace!("blocking for window {:?}", matcher);
     let mut count = 0;
     let start = SystemTime::now();
     loop {
         match x11::map_qurop_window(matcher) {
             Ok(window_id) => {
-                x11::position_window(window_id, window_delay);
+                x11::position_window(window_id, instance);
                 return window_id;
             }
             Err(Error::WindowNotFound) => {
@@ -160,7 +162,7 @@ pub(crate) fn program_thread(
             write_ctx.matcher = x11::WindowMatcher::ProcessId(Some(program.id()));
             trace!("[{}] Set a new PID {}", instance.name, program.id());
         }
-        write_ctx.window_id = Some(block_for_window(&write_ctx.matcher, instance.window_delay));
+        write_ctx.window_id = Some(block_for_window(&write_ctx.matcher, &instance));
         trace!(
             "[{}] Set a new Window ID {:?}",
             instance.name,
@@ -198,12 +200,13 @@ pub(crate) fn program_thread(
                             trace!("[{}] Setting new pid {}", instance.name, program.id());
                             write_ctx.matcher = x11::WindowMatcher::ProcessId(Some(program.id()));
                         }
-                        write_ctx.window_id =
-                            Some(block_for_window(&write_ctx.matcher, instance.window_delay));
+                        write_ctx.window_id = Some(block_for_window(&write_ctx.matcher, &instance));
                     } else {
                         let window_id = read_ctx.read().unwrap().window_id.unwrap();
                         x11::map_window(window_id);
-                        x11::position_window(window_id, instance.window_delay);
+                        x11::position_window(window_id, &instance);
+                        thread::sleep(Duration::from_millis(100));
+                        x11::focus_window(window_id);
                     }
                 }
                 "kill" => {
@@ -273,14 +276,6 @@ fn run(listener: UnixListener, instance: Instance) {
     }
 }
 
-#[derive(Debug, Clone)]
-struct Instance {
-    name: String,
-    command: String,
-    matcher: x11::WindowMatcher,
-    window_delay: Option<u64>,
-}
-
 fn main() -> Result<(), Error> {
     let args = cli::Args::parse();
     if let Some(level) = args.persist_verbosity {
@@ -301,6 +296,7 @@ fn main() -> Result<(), Error> {
             .init();
     }
     let config = config::get_config().unwrap_or_else(|err| panic!("Invalid configuration: {err}"));
+    debug!(?config, "loaded config");
     let (action, instance_name) = match args.command {
         cli::Command::Add {
             name,
@@ -336,6 +332,10 @@ fn main() -> Result<(), Error> {
             config::WindowMatcher::Process => x11::WindowMatcher::ProcessId(None),
         },
         window_delay: instance.window_delay_ms.or(Some(100)),
+        geometry: instance.geometry.clone().unwrap_or_else(|| WindowGeometry {
+            width: "66%".into(),
+            height: "50%".into(),
+        }),
     };
     match get_socket(&instance_name)? {
         StreamState::Exists(mut stream) => {

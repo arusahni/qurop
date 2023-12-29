@@ -4,7 +4,7 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-use crate::{errors::Error, utils::abort};
+use crate::{errors::Error, utils::abort, structs::WindowGeometry};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -28,6 +28,8 @@ pub(crate) struct Instance {
     pub(crate) class_name: Option<String>,
     #[serde(default)]
     pub(crate) window_delay_ms: Option<u64>,
+    #[serde(default)]
+    pub(crate) geometry: Option<WindowGeometry>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -68,6 +70,7 @@ pub fn add_instance(
             matcher,
             class_name,
             window_delay_ms: None,
+            geometry: None,
         },
     );
     let file_path = get_config_path()?;
