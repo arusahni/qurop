@@ -5,8 +5,7 @@ Turn any* Linux app into a Quake-style dropdown.
 \* only tested with Wezterm
 
 
-**This is pre-alpha software and should be treated as such. Only X11 for now,
-but I'd love to support Wayland, too**
+**Only X11 for now, but I'd love to support Wayland, too**
 
 ## Getting started
 
@@ -40,6 +39,19 @@ Global Shortcut > Command/URL)
 
 Then, hit the shortcut! That should be it.
 
+### Window size
+
+The window defaults to 66% wide and 50% high. This can be altered by editing
+the config file to add the `geometry` key to the table for your application
+instance:
+
+```toml
+geometry = { width = "<val>", height = "<val>" }
+```
+
+Values must be strings, and can contain either absolute numbers (e.g., `"55"`
+for 55 pixels), or percentages (e.g., `"33%"`).
+
 ### Matchers
 
 By default, Qurop tracks the state of a managed application instance by it's
@@ -56,6 +68,18 @@ qurop add --matcher class --class-name appclass my_instance appname
 
 ## Troubleshooting
 
+### The window isn't resized or placed correctly
+
+Qurop resizes the window after it launches. Depending on how long it takes to
+launch, the window may not be ready in time. You can alter the default delay
+(100ms) by adding the `window_delay_ms` key to the table for your application
+instance:
+
+```toml
+window_delay_ms = 500
+```
+
+### Logs
 To enable logging run the program with the `QUROP_LOG` envvar set:
 
 ```sh
