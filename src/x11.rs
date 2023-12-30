@@ -313,11 +313,22 @@ pub(crate) fn position_window(window_id: u32, instance: &Instance) {
     // but it adds some visual jank if the window launches centered and then snaps to the top of
     // the screen after the interval. By immediately positioning it at the top and then resizing,
     // we can minimize the jank.
+    let existing_config = connection
+        .get_geometry(window_id)
+        .expect("couldn't get window geometry")
+        .reply()
+        .expect("no reply");
+    let intermediate_width = if existing_config.width as u32 != width {
+        // Get the window close to final size, but leave room to trigger an event after the sleep
+        Some(width - 1)
+    } else {
+        // Don't resize it down if it's already correct
+        None
+    };
     let window_position_config = ConfigureWindowAux::new()
         .x(Some(x_pos))
         .y(Some(0))
-        // Get the window close to final size, but leave room to trigger an event after the sleep
-        .width(Some(width - 1))
+        .width(intermediate_width)
         .border_width(Some(0));
     debug!(
         "Positioning window {} to: {:?}",
