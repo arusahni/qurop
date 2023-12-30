@@ -307,13 +307,18 @@ pub(crate) fn position_window(window_id: u32, instance: &Instance) {
             &[2, 0, 0, 0, 0],
         )
         .expect("setting motif property");
-    // We split positioning and resizing due to needing a messy hack to address possible races with
-    // application startup. Certain terminal emulators, such as Wezterm, don't register resize
-    // events until a certain point in their startup. Sleeping for 100ms seems to handle this well
-    // enough, but it adds some visual jank if the window launches centered and then snaps to the
-    // top of the screen after 100ms. By immediately positioning it at the top and then resizing,
+    // We position and resize in two passes due to needing a messy hack to address possible races
+    // with application startup. Certain terminal emulators, such as Wezterm, don't register resize
+    // events until a certain point in their startup. Sleeping seems to handle this well enough,
+    // but it adds some visual jank if the window launches centered and then snaps to the top of
+    // the screen after the interval. By immediately positioning it at the top and then resizing,
     // we can minimize the jank.
-    let window_position_config = ConfigureWindowAux::new().x(Some(x_pos)).y(Some(0));
+    let window_position_config = ConfigureWindowAux::new()
+        .x(Some(x_pos))
+        .y(Some(0))
+        // Get the window close to final size, but leave room to trigger an event after the sleep
+        .width(Some(width - 1))
+        .border_width(Some(0));
     debug!(
         "Positioning window {} to: {:?}",
         window_id, window_position_config
@@ -324,8 +329,7 @@ pub(crate) fn position_window(window_id: u32, instance: &Instance) {
     connection.flush_and_sync();
     let window_geometry_config = ConfigureWindowAux::new()
         .height(Some(height))
-        .width(Some(width))
-        .border_width(Some(0));
+        .width(Some(width));
     debug!(
         "Resizing window {} to: {:?}",
         window_id, window_geometry_config
