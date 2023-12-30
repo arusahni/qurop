@@ -1,6 +1,6 @@
 [package]
 name = "qurop"
-description = "Turn applications into Quake-style dropdowns."
+description = "Turn Linux applications into Quake-style dropdowns."
 version = "0.1.0"
 authors = ["Aru Sahni <aru@arusahni.net>"]
 edition = "2021"
